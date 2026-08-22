@@ -1,1 +1,4 @@
-streamlit>=1.60 pandas>=2.0 openpyxl>=3.1 rapidfuzz>=3.0 Then scroll
+streamlit>=1.60
+pandas>=2.0
+openpyxl>=3.1
+rapidfuzz>=3.0
