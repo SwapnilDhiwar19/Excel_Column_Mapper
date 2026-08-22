@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Streamlit app: Excel Column Mapper (Refactored)
+Streamlit app: Excel Column Mapper (Modern UI Edition)
 """
 
 import io
@@ -36,9 +36,7 @@ except ImportError:
 def normalize(text: str) -> str:
     """Handle CamelCase, PascalCase, separators, and collapse whitespace."""
     text = str(text).strip()
-    # Insert space before capital letters preceded by lowercase (CamelCase -> Camel Case)
     text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
-    # Insert space before consecutive capitals followed by lowercase (e.g., 'OrderID' -> 'Order ID')
     text = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", text)
     text = text.lower()
     text = re.sub(r"[_\-]+", " ", text)
@@ -110,7 +108,7 @@ def map_columns(excel_columns: list[str], targets: list[dict], threshold: float)
             final_results.append({
                 "excel_column": r["excel_column"],
                 "db_column": None,
-                "match_type": "Unmatched (duplicate claim)",
+                "match_type": "Unmatched (duplicate)",
                 "score": r["score"],
             })
         else:
@@ -154,11 +152,11 @@ def _style_report_sheet(workbook_bytes: bytes, n_rows: int) -> bytes:
     wb = load_workbook(io.BytesIO(workbook_bytes))
     ws = wb["Column Mapping Report"]
 
-    header_fill = PatternFill(start_color="2F5597", end_color="2F5597", fill_type="solid")
+    header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True)
-    unmatched_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-    fuzzy_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-    exact_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    unmatched_fill = PatternFill(start_color="FFE4E6", end_color="FFE4E6", fill_type="solid")
+    fuzzy_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
+    exact_fill = PatternFill(start_color="DCFCE7", end_color="DCFCE7", fill_type="solid")
 
     for cell in ws[1]:
         cell.fill = header_fill
@@ -179,7 +177,7 @@ def _style_report_sheet(workbook_bytes: bytes, n_rows: int) -> bytes:
     for col_cells in ws.columns:
         max_len = max((len(str(c.value)) if c.value is not None else 0) for c in col_cells)
         col_letter = get_column_letter(col_cells[0].column)
-        ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 50)
+        ws.column_dimensions[col_letter].width = min(max(max_len + 3, 14), 50)
     ws.freeze_panes = "A2"
 
     out = io.BytesIO()
@@ -189,102 +187,196 @@ def _style_report_sheet(workbook_bytes: bytes, n_rows: int) -> bytes:
 
 def _badge(match_type: str) -> str:
     if not match_type or "Unmatched" in match_type:
-        return f"🔴 {match_type or 'Unmatched'}"
+        return f"❌ {match_type or 'Unmatched'}"
     if match_type == "Manual":
-        return "🔵 Manual"
+        return "✏️ Manual Override"
     if match_type == "Fuzzy":
-        return f"🟡 {match_type}"
-    return f"🟢 {match_type}"
+        return "⚡ Fuzzy Match"
+    if match_type == "Alias":
+        return "🏷️ Known Alias"
+    return "✅ Exact Match"
 
 
 # ============================================================================
-# Streamlit Interface
+# Streamlit Interface & Custom Styling
 # ============================================================================
 
-st.set_page_config(page_title="Excel Column Mapper", page_icon="🔗", layout="wide")
+st.set_page_config(
+    page_title="AutoSchema Mapper",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-st.title("🔗 Excel Column Mapper")
-st.caption("Standardize messy incoming Excel headers to target database schemas.")
+# Modern SaaS Styling
+st.markdown("""
+    <style>
+        /* Main background & fonts */
+        .main {
+            background-color: #f8fafc;
+        }
+        
+        /* Hero Banner */
+        .hero-container {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            padding: 2.2rem 2.5rem;
+            border-radius: 16px;
+            color: #ffffff;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.15);
+        }
+        .hero-title {
+            font-size: 2.2rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.4rem;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .hero-desc {
+            color: #94a3b8;
+            font-size: 1.05rem;
+            margin: 0;
+            max-width: 700px;
+        }
+        
+        /* Metric cards */
+        .metric-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 1.25rem 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+            transition: all 0.2s ease;
+        }
+        .metric-card:hover {
+            border-color: #cbd5e1;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        .metric-num {
+            font-size: 1.85rem;
+            font-weight: 700;
+            color: #0f172a;
+            line-height: 1.2;
+        }
+        .metric-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        /* Section cards */
+        .step-header {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# Hero Header
+st.markdown("""
+    <div class="hero-container">
+        <div class="hero-title">⚡ AutoSchema Mapper</div>
+        <p class="hero-desc">Instantly normalize raw Excel spreadsheets into your target database schema with intelligent fuzzy matching, alias detection, and one-click export.</p>
+    </div>
+""", unsafe_allow_html=True)
 
 SAMPLE_SCHEMA = [
-    {"DB Column Name": "customer_id", "Known Aliases (comma-separated, optional)": "cust_id, client_num, id"},
-    {"DB Column Name": "customer_name", "Known Aliases (comma-separated, optional)": "CustomerName, client name, full_name"},
-    {"DB Column Name": "order_date", "Known Aliases (comma-separated, optional)": "OrderDate, dt, purchase_date"},
-    {"DB Column Name": "total_amount", "Known Aliases (comma-separated, optional)": "Total, total_usd, revenue, sales"},
+    {"DB Column Name": "customer_id", "Known Aliases (comma-separated, optional)": "cust_id, client_num, id, account_no"},
+    {"DB Column Name": "customer_name", "Known Aliases (comma-separated, optional)": "CustomerName, client name, full_name, user_name"},
+    {"DB Column Name": "order_date", "Known Aliases (comma-separated, optional)": "OrderDate, dt, purchase_date, txn_date"},
+    {"DB Column Name": "total_amount", "Known Aliases (comma-separated, optional)": "Total, total_usd, revenue, sales, net_amount"},
 ]
 
 if "db_columns_df" not in st.session_state:
     st.session_state.db_columns_df = pd.DataFrame(SAMPLE_SCHEMA)
 
-# --- 1. Target Schema Configuration ---
-st.header("1. Target DB Schema")
-
-c_mode, c_preset = st.columns([3, 1])
-with c_mode:
-    col_input_mode = st.radio(
-        "Schema Input Mode",
-        ["Manual Entry", "Upload JSON", "Upload CSV"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-with c_preset:
-    if st.button("🔄 Reset to Default Schema"):
-        st.session_state.db_columns_df = pd.DataFrame(SAMPLE_SCHEMA)
-        st.rerun()
-
-db_columns_input = []
-if col_input_mode == "Manual Entry":
-    edited_df = st.data_editor(
-        st.session_state.db_columns_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="db_columns_editor",
-    )
-    st.session_state.db_columns_df = edited_df
-    db_columns_input = [
-        {
-            "db_column": str(row["DB Column Name"]).strip(),
-            "aliases": [a.strip() for a in str(row.get("Known Aliases (comma-separated, optional)", "") or "").split(",") if a.strip()],
-        }
-        for _, row in edited_df.iterrows()
-        if str(row["DB Column Name"]).strip()
-    ]
-elif col_input_mode == "Upload JSON":
-    json_file = st.file_uploader("Upload schema JSON", type=["json"])
-    if json_file:
-        try:
-            db_columns_input = json.load(json_file)
-            st.success(f"Loaded {len(db_columns_input)} target columns.")
-        except Exception as e:
-            st.error(f"JSON Error: {e}")
-else:
-    csv_file = st.file_uploader("Upload schema CSV (must have 'db_column' column)", type=["csv"])
-    if csv_file:
-        try:
-            csv_df = pd.read_csv(csv_file)
-            for _, row in csv_df.iterrows():
-                aliases_raw = str(row.get("aliases", "") or "")
-                aliases = [a.strip() for a in re.split(r"[|,]", aliases_raw) if a.strip()]
-                db_columns_input.append({"db_column": str(row["db_column"]).strip(), "aliases": aliases})
-            st.success(f"Loaded {len(db_columns_input)} target columns.")
-        except Exception as e:
-            st.error(f"CSV Error: {e}")
-
-# --- 2. File Upload & Settings ---
-st.header("2. Upload & Settings")
-col_upload, col_settings = st.columns([2, 1])
-
-with col_upload:
-    excel_file = st.file_uploader("Excel file (.xlsx, .xls)", type=["xlsx", "xls"])
-
-with col_settings:
+# --- Sidebar Configuration ---
+with st.sidebar:
+    st.markdown("### ⚙️ Engine Settings")
     threshold = st.slider(
-        "Fuzzy Match Sensitivity (%)",
+        "Fuzzy Match Sensitivity",
         min_value=50, max_value=100, value=75, step=5,
-        help="Confidence cutoff to accept fuzzy matches.",
+        format="%d%%",
+        help="Higher values require closer spelling matches before accepting an automatic match."
     )
+    
+    st.markdown("---")
+    st.markdown("### ℹ️ Engine Info")
+    st.caption(f"**Backend:** `{FUZZ_BACKEND}`")
+    st.caption("**Status:** Engine Ready")
 
-# --- 3. Processing & Mapping ---
+# --- 1. Target Schema Configuration ---
+with st.container():
+    st.markdown('<div class="step-header">🎯 1. Define Target DB Schema</div>', unsafe_allow_html=True)
+    
+    col_mode, col_reset = st.columns([3, 1])
+    with col_mode:
+        col_input_mode = st.segmented_control(
+            "Schema Input Mode",
+            ["Interactive Table", "Upload JSON", "Upload CSV"],
+            default="Interactive Table",
+            label_visibility="collapsed"
+        )
+    with col_reset:
+        if st.button("🔄 Reset Template", use_container_width=True):
+            st.session_state.db_columns_df = pd.DataFrame(SAMPLE_SCHEMA)
+            st.rerun()
+
+    db_columns_input = []
+    if col_input_mode == "Interactive Table":
+        edited_df = st.data_editor(
+            st.session_state.db_columns_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="db_columns_editor",
+        )
+        st.session_state.db_columns_df = edited_df
+        db_columns_input = [
+            {
+                "db_column": str(row["DB Column Name"]).strip(),
+                "aliases": [a.strip() for a in str(row.get("Known Aliases (comma-separated, optional)", "") or "").split(",") if a.strip()],
+            }
+            for _, row in edited_df.iterrows()
+            if str(row["DB Column Name"]).strip()
+        ]
+    elif col_input_mode == "Upload JSON":
+        json_file = st.file_uploader("Upload schema JSON", type=["json"], label_visibility="collapsed")
+        if json_file:
+            try:
+                db_columns_input = json.load(json_file)
+                st.success(f"✓ Loaded {len(db_columns_input)} target columns successfully.")
+            except Exception as e:
+                st.error(f"JSON Parsing Error: {e}")
+    else:
+        csv_file = st.file_uploader("Upload schema CSV with 'db_column' column", type=["csv"], label_visibility="collapsed")
+        if csv_file:
+            try:
+                csv_df = pd.read_csv(csv_file)
+                for _, row in csv_df.iterrows():
+                    aliases_raw = str(row.get("aliases", "") or "")
+                    aliases = [a.strip() for a in re.split(r"[|,]", aliases_raw) if a.strip()]
+                    db_columns_input.append({"db_column": str(row["db_column"]).strip(), "aliases": aliases})
+                st.success(f"✓ Loaded {len(db_columns_input)} target columns successfully.")
+            except Exception as e:
+                st.error(f"CSV Parsing Error: {e}")
+
+st.markdown("<div style='margin-top: 2rem;'></div>", unsafe_allow_html=True)
+
+# --- 2. File Upload ---
+with st.container():
+    st.markdown('<div class="step-header">📂 2. Upload Source Spreadsheet</div>', unsafe_allow_html=True)
+    excel_file = st.file_uploader("Upload your incoming spreadsheet", type=["xlsx", "xls"], label_visibility="collapsed")
+
+# --- 3. Processing, Visual Metrics & Mapping ---
 if excel_file is not None and db_columns_input:
     targets = build_targets(db_columns_input)
     available_db_columns = [t["db_column"] for t in targets]
@@ -292,21 +384,26 @@ if excel_file is not None and db_columns_input:
 
     try:
         xls = pd.ExcelFile(excel_file)
-        sheet = xls.sheet_names[0] if len(xls.sheet_names) == 1 else st.selectbox("Select Sheet", xls.sheet_names)
+        if len(xls.sheet_names) > 1:
+            sheet = st.selectbox("📑 Select Active Sheet", xls.sheet_names)
+        else:
+            sheet = xls.sheet_names[0]
         raw_df = pd.read_excel(excel_file, sheet_name=sheet)
     except Exception as e:
-        st.error(f"Could not read Excel file: {e}")
+        st.error(f"Could not read spreadsheet: {e}")
         st.stop()
 
-    st.header("3. Review & Override Mappings")
     base_results = map_columns(list(raw_df.columns), targets, threshold)
+
+    st.markdown("<div style='margin-top: 2rem;'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="step-header">🔍 3. Review & Validate Mappings</div>', unsafe_allow_html=True)
 
     editor_data = pd.DataFrame([
         {
-            "Excel Column (original)": r["excel_column"],
-            "Mapped DB Column": r["db_column"] if r["db_column"] else "-- NOT MATCHED --",
-            "Auto Match Status": _badge(r["match_type"]),
-            "Auto Score": round(r["score"], 1),
+            "Excel Column (Original)": r["excel_column"],
+            "Target DB Column": r["db_column"] if r["db_column"] else "-- NOT MATCHED --",
+            "Match Status": _badge(r["match_type"]),
+            "Confidence": f"{round(r['score'])}%",
         }
         for r in base_results
     ])
@@ -315,21 +412,21 @@ if excel_file is not None and db_columns_input:
         editor_data,
         use_container_width=True,
         hide_index=True,
-        disabled=["Excel Column (original)", "Auto Match Status", "Auto Score"],
+        disabled=["Excel Column (Original)", "Match Status", "Confidence"],
         column_config={
-            "Mapped DB Column": st.column_config.SelectboxColumn(
-                "Mapped DB Column",
+            "Target DB Column": st.column_config.SelectboxColumn(
+                "Target DB Column",
                 options=dropdown_options,
                 required=True,
-                help="Override the assigned target column.",
+                help="Select target column to link or override manually.",
             )
         },
     )
 
-    # Reconcile overrides & track manual modifications
+    # Reconcile overrides
     reconciled_results = []
     assigned_targets = []
-    for orig, edited_val in zip(base_results, edited_table["Mapped DB Column"]):
+    for orig, edited_val in zip(base_results, edited_table["Target DB Column"]):
         target = None if edited_val == "-- NOT MATCHED --" else edited_val
         is_modified = target != orig["db_column"]
 
@@ -342,55 +439,70 @@ if excel_file is not None and db_columns_input:
         if target:
             assigned_targets.append(target)
 
-    # Validate target duplicates
+    # Calculate real-time stats
+    total_cols = len(reconciled_results)
+    matched_count = sum(1 for r in reconciled_results if r["db_column"])
+    unmatched_count = total_cols - matched_count
+    match_rate = round((matched_count / total_cols * 100), 1) if total_cols else 0
+
+    # Display KPI Metrics
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Source Columns</div><div class="metric-num">{total_cols}</div></div>', unsafe_allow_html=True)
+    with m2:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Mapped</div><div class="metric-num" style="color:#16a34a;">{matched_count}</div></div>', unsafe_allow_html=True)
+    with m3:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Unmapped</div><div class="metric-num" style="color:#dc2626;">{unmatched_count}</div></div>', unsafe_allow_html=True)
+    with m4:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Coverage</div><div class="metric-num" style="color:#2563eb;">{match_rate}%</div></div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-top: 1.5rem;'></div>", unsafe_allow_html=True)
+
+    # Duplicate collisions
     duplicates = [col for col, count in Counter(assigned_targets).items() if count > 1]
     has_collision = len(duplicates) > 0
 
     if has_collision:
-        st.error(f"⛔ **Duplicate Mapping Conflict:** The database column(s) `{', '.join(duplicates)}` have been assigned to multiple Excel headers. Fix them before downloading.")
+        st.error(f"⛔ **Mapping Collision:** Target column `{', '.join(duplicates)}` is assigned multiple times. Please adjust assignments to proceed.")
 
-    # --- 4. Preview & Export ---
-    st.header("4. Preview & Download")
+    # --- 4. Export Section ---
+    st.markdown('<div class="step-header">🚀 4. Preview & Export</div>', unsafe_allow_html=True)
+    
     rename_dict = {r["excel_column"]: r["db_column"] for r in reconciled_results if r["db_column"]}
-    
-    # Construct preview DF (keep original unmapped name if unassigned)
     preview_df = raw_df.rename(columns=rename_dict)
-    
     all_exportable_cols = list(preview_df.columns)
-    selected_cols = st.multiselect(
-        "Select output columns:",
-        options=all_exportable_cols,
-        default=all_exportable_cols,
-    )
 
-    if selected_cols:
-        st.dataframe(preview_df[selected_cols].head(10), use_container_width=True)
-    else:
-        st.info("No columns selected for preview.")
+    with st.expander("👁️ Data Preview & Column Filtering", expanded=True):
+        selected_cols = st.multiselect(
+            "Included Columns in Output:",
+            options=all_exportable_cols,
+            default=all_exportable_cols,
+        )
+        if selected_cols:
+            st.dataframe(preview_df[selected_cols].head(8), use_container_width=True)
+        else:
+            st.warning("Select at least one column to export.")
 
-    filter_download = st.checkbox("Apply column subset selection to final file", value=False)
-    
+    filter_download = st.checkbox("Export only the selected column subset", value=False)
     final_export_df = preview_df[selected_cols] if filter_download and selected_cols else preview_df
     restrict_report = selected_cols if filter_download and selected_cols else None
 
-    if not has_collision:
+    if not has_collision and len(final_export_df.columns) > 0:
         output_bytes = build_output_workbook_bytes(final_export_df, reconciled_results, restrict_report_to=restrict_report)
         out_name = f"{excel_file.name.rsplit('.', 1)[0]}_standardized.xlsx"
 
         st.download_button(
-            label="📥 Download Processed Excel",
+            label="📥 Download Standardized Spreadsheet",
             data=output_bytes,
             file_name=out_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
+            use_container_width=True,
         )
     else:
-        st.button("📥 Download Processed Excel", disabled=True, help="Resolve duplicate column mappings above to enable download.")
+        st.button("📥 Download Standardized Spreadsheet", disabled=True, use_container_width=True)
 
 elif not db_columns_input:
-    st.info("Define at least one target database column in Step 1.")
+    st.info("💡 Add at least one target DB column in **Step 1** to get started.")
 else:
-    st.info("Upload an Excel file in Step 2 to begin mapping.")
-
-st.divider()
-st.caption(f"Fuzzy Engine: `{FUZZ_BACKEND}` | Streamlit Native")
+    st.info("💡 Upload an Excel spreadsheet in **Step 2** to begin matching.")
