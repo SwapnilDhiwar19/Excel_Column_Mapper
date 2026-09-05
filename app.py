@@ -31,8 +31,6 @@ except ImportError:
 
     fuzz = _FuzzShim()
 
-from sqlalchemy import create_engine, text
-
 
 # ============================================================================
 # Core Normalization & Matching Logic
@@ -209,45 +207,59 @@ def load_uploaded_df(file) -> pd.DataFrame:
 
 
 # ============================================================================
-# Databricks Native Driver Helpers
+# Databricks Native Driver Helpers (Direct Secrets Integration)
 # ============================================================================
 
-def get_databricks_connection(server_hostname: str, http_path: str, access_token: str, catalog: str = "", schema: str = ""):
-    clean_host = server_hostname.replace("https://", "").replace("http://", "").strip("/")
-    clean_path = http_path.strip()
-    if not clean_path.startswith("/"):
+def get_databricks_connection():
+    """Reads credentials directly from st.secrets['databricks']."""
+    if not HAS_DATABRICKS_DRIVER:
+        st.error("Missing dependency: Run `pip install databricks-sql-connector` in your environment.")
+        st.stop()
+
+    if "databricks" not in st.secrets:
+        st.error("Missing Databricks configuration: Add `[databricks]` section to your Streamlit secrets.")
+        st.stop()
+
+    sec = st.secrets["databricks"]
+    clean_host = sec.get("host", "").replace("https://", "").replace("http://", "").strip("/")
+    clean_path = sec.get("http_path", "").strip()
+    if clean_path and not clean_path.startswith("/"):
         clean_path = "/" + clean_path
 
-    clean_token = access_token.strip().strip("'").strip('"')
+    clean_token = sec.get("token", "").strip().strip("'").strip('"')
     if clean_token.lower().startswith("bearer "):
         clean_token = clean_token[7:].strip()
+
+    catalog = sec.get("catalog", "workspace").strip()
+    schema = sec.get("schema", "excel_column_mapping_utility").strip()
 
     conn_kwargs = {
         "server_hostname": clean_host,
         "http_path": clean_path,
         "access_token": clean_token,
     }
-    if catalog and catalog.strip():
-        conn_kwargs["catalog"] = catalog.strip()
-    if schema and schema.strip():
-        conn_kwargs["schema"] = schema.strip()
+    if catalog:
+        conn_kwargs["catalog"] = catalog
+    if schema:
+        conn_kwargs["schema"] = schema
 
     return dbsql.connect(**conn_kwargs)
 
 
-def format_table_identifier(tbl: str, creds_dict: dict) -> str:
-    """Safely quotes 3-part or 2-part Databricks table identifiers."""
+def format_table_identifier(tbl: str) -> str:
+    """Safely quotes 3-part or 2-part Databricks table identifiers using secrets defaults."""
+    sec = st.secrets.get("databricks", {})
+    cat = sec.get("catalog", "workspace").strip()
+    sch = sec.get("schema", "excel_column_mapping_utility").strip()
+
     parts = [p.strip().replace("`", "") for p in tbl.strip().split(".") if p.strip()]
     if len(parts) == 3:
         return f"`{parts[0]}`.`{parts[1]}`.`{parts[2]}`"
     elif len(parts) == 2:
-        cat = creds_dict.get("catalog", "").strip()
         if cat:
             return f"`{cat}`.`{parts[0]}`.`{parts[1]}`"
         return f"`{parts[0]}`.`{parts[1]}`"
     else:
-        cat = creds_dict.get("catalog", "").strip()
-        sch = creds_dict.get("schema", "").strip()
         if cat and sch:
             return f"`{cat}`.`{sch}`.`{parts[0]}`"
         elif sch:
@@ -255,37 +267,12 @@ def format_table_identifier(tbl: str, creds_dict: dict) -> str:
         return f"`{parts[0]}`"
 
 
-def init_mock_metadata_db():
-    """Local SQLite mock database simulating a metadata table."""
-    eng = create_engine("sqlite:///:memory:")
-    with eng.connect() as conn:
-        conn.execute(text("""
-            CREATE TABLE columns_master (
-                report_name TEXT,
-                column_name TEXT,
-                aliases TEXT
-            );
-        """))
-        conn.execute(text("""
-            INSERT INTO columns_master VALUES
-            ('Sales Summary', 'customer_id', 'cust_id, client_code, id'),
-            ('Sales Summary', 'order_date', 'date, txn_date, purchase_date'),
-            ('Sales Summary', 'total_amount', 'sales, revenue, net_amount'),
-            ('Sales Summary', 'sales_rep', 'agent, representative, employee'),
-            ('Inventory Ledger', 'sku_code', 'item_code, product_id, part_number'),
-            ('Inventory Ledger', 'warehouse_location', 'wh_id, site, facility'),
-            ('Inventory Ledger', 'stock_quantity', 'qty, available_qty, count');
-        """))
-        conn.commit()
-    return eng
-
-
 # ============================================================================
 # Streamlit Interface
 # ============================================================================
 
 st.set_page_config(
-    page_title="AutoSchema Mapper - Databricks Edition",
+    page_title="AutoSchema Mapper - Databricks",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -356,7 +343,7 @@ st.markdown("""
 st.markdown("""
     <div class="hero-container">
         <div class="hero-title">⚡ AutoSchema Mapper (Databricks)</div>
-        <p class="hero-desc">Extract target schema columns directly from your Databricks metadata registry table by selecting your table, filter column, and report name.</p>
+        <p class="hero-desc">Directly connected to Databricks Lakehouse. Select your metadata table, pick your report filter, and map spreadsheet headers with up to 5 master joins.</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -369,273 +356,209 @@ with st.sidebar:
         help="Higher values require closer spelling matches before auto-accepting."
     )
     st.markdown("---")
-    st.markdown("### ℹ️ Engine Info")
-    st.caption(f"**Fuzzy Backend:** `{FUZZ_BACKEND}`")
-    st.caption(f"**Databricks Driver:** `{'Installed' if HAS_DATABRICKS_DRIVER else 'Missing'}`")
+    st.markdown("### ℹ️ Databricks Context")
+    sec_cfg = st.secrets.get("databricks", {})
+    st.caption(f"**Catalog:** `{sec_cfg.get('catalog', 'workspace')}`")
+    st.caption(f"**Schema:** `{sec_cfg.get('schema', 'excel_column_mapping_utility')}`")
+    st.caption(f"**Fuzzy Engine:** `{FUZZ_BACKEND}`")
 
-# --- 1. Target Schema Configuration ---
+# --- 1. Target Schema Configuration (Auto-Connected to Databricks) ---
 with st.container():
-    st.markdown('<div class="step-header">🎯 1. Target Schema Definition (Databricks Metadata)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="step-header">🎯 1. Target Schema Definition</div>', unsafe_allow_html=True)
 
-    mode = st.radio(
-        "Connection Type:",
-        ["Connect to Databricks SQL Warehouse", "Built-in Demo (Metadata Table Simulation)"],
+    # Automatically fetch tables on startup
+    if "databricks_tables" not in st.session_state:
+        try:
+            with st.spinner("Connecting to Databricks Lakehouse..."):
+                conn = get_databricks_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute("SHOW TABLES")
+                    res = cursor.fetchall()
+                    found_tables = [row["tableName"] if isinstance(row, dict) else row[1] for row in res]
+                    st.session_state["databricks_tables"] = sorted(found_tables)
+                conn.close()
+        except Exception as e:
+            st.error(f"Databricks Connection Failed: {e}")
+            st.stop()
+
+    tables_available = st.session_state.get("databricks_tables", [])
+    db_columns_input = []
+
+    config_method = st.radio(
+        "Extraction Method:",
+        ["Filter by Report Name (Cascading Dropdowns)", "Write Custom SQL Query"],
         horizontal=True
     )
 
-    db_columns_input = []
+    if config_method == "Filter by Report Name (Cascading Dropdowns)":
+        # 1️⃣ Table Selection
+        c_tbl, c_refresh = st.columns([4, 1])
+        with c_tbl:
+            if tables_available:
+                default_idx = 0
+                for idx, t_name in enumerate(tables_available):
+                    if "columns_master" in t_name.lower():
+                        default_idx = idx
+                        break
+                selected_table = st.selectbox("1️⃣ Select Metadata Table:", options=tables_available, index=default_idx)
+            else:
+                selected_table = st.text_input("1️⃣ Metadata Table Name:", value="columns_master")
 
-    if mode == "Built-in Demo (Metadata Table Simulation)":
-        if "mock_meta_eng" not in st.session_state:
-            st.session_state.mock_meta_eng = init_mock_metadata_db()
-        eng = st.session_state.mock_meta_eng
+        with c_refresh:
+            st.write("")
+            st.write("")
+            if st.button("🔄 Refresh Cache"):
+                st.session_state.pop(f"cols_{selected_table}", None)
+                st.session_state.pop(f"filter_vals_{selected_table}", None)
+                st.rerun()
 
-        with eng.connect() as conn:
-            demo_reports = [r[0] for r in conn.execute(text("SELECT DISTINCT report_name FROM columns_master ORDER BY 1")).fetchall()]
+        # Fetch table columns
+        table_cols_key = f"cols_{selected_table}"
+        if table_cols_key not in st.session_state and selected_table:
+            try:
+                conn = get_databricks_connection()
+                qual_tbl = format_table_identifier(selected_table)
+                with conn.cursor() as cursor:
+                    cursor.execute(f"DESCRIBE TABLE {qual_tbl}")
+                    desc_res = cursor.fetchall()
+                    loaded_fields = [
+                        (row["col_name"] if isinstance(row, dict) else row[0])
+                        for row in desc_res
+                        if row and not str(row[0]).startswith("#")
+                    ]
+                    st.session_state[table_cols_key] = loaded_fields
+                conn.close()
+            except Exception as e:
+                st.error(f"Could not read columns from `{selected_table}`: {e}")
 
-        selected_report = st.selectbox("Select Report Name from columns_master:", demo_reports)
-        if selected_report:
-            with eng.connect() as conn:
-                res = conn.execute(text(f"SELECT column_name, aliases FROM columns_master WHERE report_name = '{selected_report}'")).fetchall()
-                db_columns_input = [
-                    {
-                        "db_column": row[0],
-                        "aliases": [a.strip() for a in str(row[1] or "").split(",") if a.strip()]
-                    }
-                    for row in res
-                ]
-            st.markdown(f"**Loaded {len(db_columns_input)} Columns for `{selected_report}`:**")
-            st.markdown(" ".join([f"<span class='col-pill'>{c['db_column']}</span>" for c in db_columns_input]), unsafe_allow_html=True)
+        table_fields = st.session_state.get(table_cols_key, [])
+
+        if table_fields:
+            col_step2, col_step3 = st.columns(2)
+
+            # 2️⃣ Filter Column
+            def find_best_index(options, candidates):
+                for c in candidates:
+                    for idx, opt in enumerate(options):
+                        if c in opt.lower():
+                            return idx
+                return 0
+
+            with col_step2:
+                filter_col_idx = find_best_index(table_fields, ["report", "type", "category"])
+                filter_column = st.selectbox("2️⃣ Filter Column (Report Field):", options=table_fields, index=filter_col_idx)
+
+            # Dynamic distinct values for the chosen filter column
+            filter_cache_key = f"filter_vals_{selected_table}_{filter_column}"
+            if filter_cache_key not in st.session_state:
+                try:
+                    conn = get_databricks_connection()
+                    qual_tbl = format_table_identifier(selected_table)
+                    with conn.cursor() as cursor:
+                        cursor.execute(f"SELECT DISTINCT `{filter_column}` FROM {qual_tbl} WHERE `{filter_column}` IS NOT NULL ORDER BY 1")
+                        distinct_rows = cursor.fetchall()
+                        st.session_state[filter_cache_key] = [str(r[0]) for r in distinct_rows if r[0] is not None]
+                    conn.close()
+                except Exception as e:
+                    st.error(f"Could not fetch distinct values for `{filter_column}`: {e}")
+
+            distinct_filter_values = st.session_state.get(filter_cache_key, [])
+
+            # 3️⃣ Filter Value Selection
+            with col_step3:
+                if distinct_filter_values:
+                    chosen_report = st.selectbox(
+                        f"3️⃣ Select Report to Filter on (`{filter_column}`):",
+                        options=distinct_filter_values
+                    )
+                else:
+                    chosen_report = None
+                    st.warning(f"No values found in `{filter_column}`.")
+
+            # Query all other columns automatically for the selected report
+            if chosen_report:
+                try:
+                    conn = get_databricks_connection()
+                    qual_tbl = format_table_identifier(selected_table)
+
+                    remaining_cols = [c for c in table_fields if c != filter_column]
+                    target_candidates = [c for c in remaining_cols if any(k in c.lower() for k in ["column", "target", "col", "field"])]
+                    target_col = target_candidates[0] if target_candidates else (remaining_cols[0] if remaining_cols else None)
+
+                    alias_candidates = [c for c in remaining_cols if c != target_col and any(k in c.lower() for k in ["alias", "synonym"])]
+                    alias_col = alias_candidates[0] if alias_candidates else None
+
+                    with conn.cursor() as cursor:
+                        if target_col and alias_col:
+                            query = f"SELECT `{target_col}`, `{alias_col}` FROM {qual_tbl} WHERE `{filter_column}` = '{chosen_report}'"
+                            cursor.execute(query)
+                            results = cursor.fetchall()
+                            db_columns_input = [
+                                {
+                                    "db_column": str(r[0]).strip(),
+                                    "aliases": [a.strip() for a in str(r[1] or "").split(",") if a.strip()]
+                                }
+                                for r in results if r[0]
+                            ]
+                        elif target_col:
+                            query = f"SELECT `{target_col}` FROM {qual_tbl} WHERE `{filter_column}` = '{chosen_report}'"
+                            cursor.execute(query)
+                            results = cursor.fetchall()
+                            db_columns_input = [{"db_column": str(r[0]).strip(), "aliases": []} for r in results if r[0]]
+                        else:
+                            query = f"SELECT * FROM {qual_tbl} WHERE `{filter_column}` = '{chosen_report}'"
+                            cursor.execute(query)
+                            results = cursor.fetchall()
+                            col_names = [col[0] for col in cursor.description]
+                            t_idx = 1 if len(col_names) > 1 else 0
+                            db_columns_input = [{"db_column": str(r[t_idx]).strip(), "aliases": []} for r in results if r[t_idx]]
+
+                    conn.close()
+
+                    st.markdown(f"**Loaded {len(db_columns_input)} Target Columns for `{chosen_report}`:**")
+                    st.markdown(" ".join([f"<span class='col-pill'>{c['db_column']}</span>" for c in db_columns_input]), unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"Error loading report columns: {e}")
 
     else:
-        if not HAS_DATABRICKS_DRIVER:
-            st.error("Missing dependency: Run `pip install databricks-sql-connector` in your terminal.")
-            st.stop()
-
-        # Safely pull secrets from Streamlit Cloud or local .streamlit/secrets.toml
-        db_secrets = st.secrets.get("databricks", {})
-        default_host = db_secrets.get("host", "")
-        default_http_path = db_secrets.get("http_path", "")
-        default_token = db_secrets.get("token", "")
-        default_catalog = db_secrets.get("catalog", "workspace")
-        default_schema = db_secrets.get("schema", "excel_column_mapping_utility")
-
-        has_secrets = bool(default_host and default_http_path and default_token)
-
-        with st.expander("🔑 Databricks Warehouse Credentials", expanded=not has_secrets and "db_creds" not in st.session_state):
-            if has_secrets:
-                st.caption("🔒 Credentials detected from Streamlit Secrets.")
-
-            col_c1, col_c2 = st.columns(2)
-            with col_c1:
-                db_host = st.text_input("Server Hostname", value=default_host, placeholder="adb-xxxx.xx.azuredatabricks.net")
-                db_http_path = st.text_input("HTTP Path", value=default_http_path, placeholder="/sql/1.0/warehouses/xxxxxxxxxxxx")
-            with col_c2:
-                db_token = st.text_input("Personal Access Token (PAT)", value=default_token, type="password")
-                col_cat, col_sch = st.columns(2)
-                with col_cat:
-                    db_catalog = st.text_input("Catalog", value=default_catalog)
-                with col_sch:
-                    db_schema = st.text_input("Schema / Database", value=default_schema)
-
-            connect_btn = st.button("🔗 Connect to Databricks")
-
-        should_connect = connect_btn or (has_secrets and "db_creds" not in st.session_state)
-
-        if should_connect and db_host and db_http_path and db_token:
+        sec = st.secrets.get("databricks", {})
+        cat = sec.get("catalog", "workspace")
+        sch = sec.get("schema", "excel_column_mapping_utility")
+        default_query = f"SELECT column_name, aliases FROM {cat}.{sch}.columns_master WHERE report_name = 'Sales_Report'"
+        custom_sql = st.text_area(
+            "✏️ Custom SQL Query:",
+            value=st.session_state.get("last_custom_meta_sql", default_query),
+            help="First column returns target column names. Second column (optional) returns aliases.",
+            height=100
+        )
+        if st.button("🚀 Execute SQL Query"):
+            st.session_state["last_custom_meta_sql"] = custom_sql
             try:
-                with st.spinner("Connecting and loading tables from Databricks..."):
-                    conn = get_databricks_connection(db_host, db_http_path, db_token, db_catalog, db_schema)
+                with st.spinner("Executing query on Databricks..."):
+                    conn = get_databricks_connection()
                     with conn.cursor() as cursor:
-                        cursor.execute("SHOW TABLES")
-                        res = cursor.fetchall()
-                        found_tables = [row["tableName"] if isinstance(row, dict) else row[1] for row in res]
-                        st.session_state["databricks_tables"] = sorted(found_tables)
-                        st.session_state["db_creds"] = {
-                            "host": db_host, "path": db_http_path, "token": db_token,
-                            "catalog": db_catalog, "schema": db_schema
-                        }
-                    conn.close()
-                st.success(f"✓ Connected successfully! Found {len(found_tables)} table(s) in `{db_catalog}.{db_schema}`.")
-            except Exception as e:
-                st.error(f"Databricks Connection Failed: {e}")
-
-        if "db_creds" in st.session_state:
-            creds = st.session_state["db_creds"]
-
-            config_method = st.radio(
-                "How do you want to extract columns from your metadata table?",
-                ["Filter by Report Name (Cascading Dropdowns)", "Write Custom SQL Query"],
-                horizontal=True
-            )
-
-            if config_method == "Filter by Report Name (Cascading Dropdowns)":
-                tables_available = st.session_state.get("databricks_tables", [])
-
-                # 1️⃣ Table Selection
-                c_tbl, c_refresh = st.columns([4, 1])
-                with c_tbl:
-                    if tables_available:
-                        default_idx = 0
-                        for idx, t_name in enumerate(tables_available):
-                            if "columns_master" in t_name.lower():
-                                default_idx = idx
-                                break
-                        selected_table = st.selectbox("1️⃣ Select Metadata Table:", options=tables_available, index=default_idx)
-                    else:
-                        selected_table = st.text_input("1️⃣ Metadata Table Name:", value="columns_master")
-
-                with c_refresh:
-                    st.write("")
-                    st.write("")
-                    if st.button("🔄 Reload Columns"):
-                        st.session_state.pop(f"cols_{selected_table}", None)
-                        st.session_state.pop(f"filter_vals_{selected_table}", None)
-
-                # Fetch table column definitions
-                table_cols_key = f"cols_{selected_table}"
-                if table_cols_key not in st.session_state and selected_table:
-                    try:
-                        conn = get_databricks_connection(creds["host"], creds["path"], creds["token"], creds["catalog"], creds["schema"])
-                        qual_tbl = format_table_identifier(selected_table, creds)
-                        with conn.cursor() as cursor:
-                            cursor.execute(f"DESCRIBE TABLE {qual_tbl}")
-                            desc_res = cursor.fetchall()
-                            loaded_fields = [
-                                (row["col_name"] if isinstance(row, dict) else row[0])
-                                for row in desc_res
-                                if row and not str(row[0]).startswith("#")
+                        cursor.execute(custom_sql)
+                        rows = cursor.fetchall()
+                        if len(cursor.description) > 1:
+                            db_columns_input = [
+                                {
+                                    "db_column": str(r[0]).strip(),
+                                    "aliases": [a.strip() for a in str(r[1] or "").split(",") if a.strip()]
+                                }
+                                for r in rows if r[0]
                             ]
-                            st.session_state[table_cols_key] = loaded_fields
-                        conn.close()
-                    except Exception as e:
-                        st.error(f"Could not read columns from `{selected_table}`: {e}")
-
-                table_fields = st.session_state.get(table_cols_key, [])
-
-                if table_fields:
-                    col_step2, col_step3 = st.columns(2)
-
-                    # 2️⃣ Filter Column
-                    def find_best_index(options, candidates):
-                        for c in candidates:
-                            for idx, opt in enumerate(options):
-                                if c in opt.lower():
-                                    return idx
-                        return 0
-
-                    with col_step2:
-                        filter_col_idx = find_best_index(table_fields, ["report", "type", "category"])
-                        filter_column = st.selectbox("2️⃣ Filter Column (Report Name Field):", options=table_fields, index=filter_col_idx)
-
-                    # Dynamic distinct values for the chosen filter column
-                    filter_cache_key = f"filter_vals_{selected_table}_{filter_column}"
-                    if filter_cache_key not in st.session_state:
-                        try:
-                            conn = get_databricks_connection(creds["host"], creds["path"], creds["token"], creds["catalog"], creds["schema"])
-                            qual_tbl = format_table_identifier(selected_table, creds)
-                            with conn.cursor() as cursor:
-                                cursor.execute(f"SELECT DISTINCT `{filter_column}` FROM {qual_tbl} WHERE `{filter_column}` IS NOT NULL ORDER BY 1")
-                                distinct_rows = cursor.fetchall()
-                                st.session_state[filter_cache_key] = [str(r[0]) for r in distinct_rows if r[0] is not None]
-                            conn.close()
-                        except Exception as e:
-                            st.error(f"Could not fetch distinct values for `{filter_column}`: {e}")
-
-                    distinct_filter_values = st.session_state.get(filter_cache_key, [])
-
-                    # 3️⃣ Filter Value Selection
-                    with col_step3:
-                        if distinct_filter_values:
-                            chosen_report = st.selectbox(
-                                f"3️⃣ Select Value to Filter on (`{filter_column}`):",
-                                options=distinct_filter_values
-                            )
                         else:
-                            chosen_report = None
-                            st.warning(f"No values found in `{filter_column}`.")
+                            db_columns_input = [{"db_column": str(r[0]).strip(), "aliases": []} for r in rows if r[0]]
+                        st.session_state["custom_sql_cols"] = db_columns_input
+                    conn.close()
+                    st.success(f"✓ Retrieved {len(db_columns_input)} column names.")
+            except Exception as e:
+                st.error(f"SQL execution error: {e}")
 
-                    # Query all other columns automatically for the selected report
-                    if chosen_report:
-                        try:
-                            conn = get_databricks_connection(creds["host"], creds["path"], creds["token"], creds["catalog"], creds["schema"])
-                            qual_tbl = format_table_identifier(selected_table, creds)
-
-                            remaining_cols = [c for c in table_fields if c != filter_column]
-                            target_candidates = [c for c in remaining_cols if any(k in c.lower() for k in ["column", "target", "col", "field"])]
-                            target_col = target_candidates[0] if target_candidates else (remaining_cols[0] if remaining_cols else None)
-
-                            alias_candidates = [c for c in remaining_cols if c != target_col and any(k in c.lower() for k in ["alias", "synonym"])]
-                            alias_col = alias_candidates[0] if alias_candidates else None
-
-                            with conn.cursor() as cursor:
-                                if target_col and alias_col:
-                                    query = f"SELECT `{target_col}`, `{alias_col}` FROM {qual_tbl} WHERE `{filter_column}` = '{chosen_report}'"
-                                    cursor.execute(query)
-                                    results = cursor.fetchall()
-                                    db_columns_input = [
-                                        {
-                                            "db_column": str(r[0]).strip(),
-                                            "aliases": [a.strip() for a in str(r[1] or "").split(",") if a.strip()]
-                                        }
-                                        for r in results if r[0]
-                                    ]
-                                elif target_col:
-                                    query = f"SELECT `{target_col}` FROM {qual_tbl} WHERE `{filter_column}` = '{chosen_report}'"
-                                    cursor.execute(query)
-                                    results = cursor.fetchall()
-                                    db_columns_input = [{"db_column": str(r[0]).strip(), "aliases": []} for r in results if r[0]]
-                                else:
-                                    query = f"SELECT * FROM {qual_tbl} WHERE `{filter_column}` = '{chosen_report}'"
-                                    cursor.execute(query)
-                                    results = cursor.fetchall()
-                                    col_names = [col[0] for col in cursor.description]
-                                    t_idx = 1 if len(col_names) > 1 else 0
-                                    db_columns_input = [{"db_column": str(r[t_idx]).strip(), "aliases": []} for r in results if r[t_idx]]
-
-                            conn.close()
-
-                            st.markdown(f"**Loaded {len(db_columns_input)} Target Columns for `{chosen_report}`:**")
-                            st.markdown(" ".join([f"<span class='col-pill'>{c['db_column']}</span>" for c in db_columns_input]), unsafe_allow_html=True)
-                        except Exception as e:
-                            st.error(f"Error loading report columns: {e}")
-
-            else:
-                default_query = f"SELECT column_name, aliases FROM {creds.get('catalog', 'workspace')}.{creds.get('schema', 'excel_column_mapping_utility')}.columns_master WHERE report_name = 'Sales_Report'"
-                custom_sql = st.text_area(
-                    "✏️ Custom SQL Query:",
-                    value=st.session_state.get("last_custom_meta_sql", default_query),
-                    help="First column must return target column names. Second column (optional) can return comma-separated aliases.",
-                    height=100
-                )
-                if st.button("🚀 Execute SQL Query"):
-                    st.session_state["last_custom_meta_sql"] = custom_sql
-                    try:
-                        with st.spinner("Executing query..."):
-                            conn = get_databricks_connection(creds["host"], creds["path"], creds["token"], creds["catalog"], creds["schema"])
-                            with conn.cursor() as cursor:
-                                cursor.execute(custom_sql)
-                                rows = cursor.fetchall()
-                                if len(cursor.description) > 1:
-                                    db_columns_input = [
-                                        {
-                                            "db_column": str(r[0]).strip(),
-                                            "aliases": [a.strip() for a in str(r[1] or "").split(",") if a.strip()]
-                                        }
-                                        for r in rows if r[0]
-                                    ]
-                                else:
-                                    db_columns_input = [{"db_column": str(r[0]).strip(), "aliases": []} for r in rows if r[0]]
-                                st.session_state["custom_sql_cols"] = db_columns_input
-                            conn.close()
-                            st.success(f"✓ Retrieved {len(db_columns_input)} column names.")
-                    except Exception as e:
-                        st.error(f"SQL execution error: {e}")
-
-                if "custom_sql_cols" in st.session_state and not db_columns_input:
-                    db_columns_input = st.session_state["custom_sql_cols"]
-                    st.markdown(f"**Active Target Columns ({len(db_columns_input)}):**")
-                    st.markdown(" ".join([f"<span class='col-pill'>{c['db_column']}</span>" for c in db_columns_input]), unsafe_allow_html=True)
+        if "custom_sql_cols" in st.session_state and not db_columns_input:
+            db_columns_input = st.session_state["custom_sql_cols"]
+            st.markdown(f"**Active Target Columns ({len(db_columns_input)}):**")
+            st.markdown(" ".join([f"<span class='col-pill'>{c['db_column']}</span>" for c in db_columns_input]), unsafe_allow_html=True)
 
 st.markdown("<div style='margin-top: 1.5rem;'></div>", unsafe_allow_html=True)
 
