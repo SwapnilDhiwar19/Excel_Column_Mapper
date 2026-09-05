@@ -337,6 +337,30 @@ st.markdown("""
             font-family: monospace;
             margin: 3px;
         }
+        .pill-mapped {
+            display: inline-block;
+            background-color: #dcfce7;
+            color: #15803d;
+            border: 1px solid #bbf7d0;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-family: monospace;
+            margin: 3px;
+            font-weight: 600;
+        }
+        .pill-unmapped {
+            display: inline-block;
+            background-color: #ffe4e6;
+            color: #b91c1c;
+            border: 1px solid #fecdd3;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-family: monospace;
+            margin: 3px;
+            font-weight: 600;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -366,7 +390,6 @@ with st.sidebar:
 with st.container():
     st.markdown('<div class="step-header">🎯 1. Target Schema Definition</div>', unsafe_allow_html=True)
 
-    # Automatically fetch tables on startup
     if "databricks_tables" not in st.session_state:
         try:
             with st.spinner("Connecting to Databricks Lakehouse..."):
@@ -391,7 +414,6 @@ with st.container():
     )
 
     if config_method == "Filter by Report Name (Cascading Dropdowns)":
-        # 1️⃣ Table Selection
         c_tbl, c_refresh = st.columns([4, 1])
         with c_tbl:
             if tables_available:
@@ -412,7 +434,6 @@ with st.container():
                 st.session_state.pop(f"filter_vals_{selected_table}", None)
                 st.rerun()
 
-        # Fetch table columns
         table_cols_key = f"cols_{selected_table}"
         if table_cols_key not in st.session_state and selected_table:
             try:
@@ -436,7 +457,6 @@ with st.container():
         if table_fields:
             col_step2, col_step3 = st.columns(2)
 
-            # 2️⃣ Filter Column
             def find_best_index(options, candidates):
                 for c in candidates:
                     for idx, opt in enumerate(options):
@@ -448,7 +468,6 @@ with st.container():
                 filter_col_idx = find_best_index(table_fields, ["report", "type", "category"])
                 filter_column = st.selectbox("2️⃣ Filter Column (Report Field):", options=table_fields, index=filter_col_idx)
 
-            # Dynamic distinct values for the chosen filter column
             filter_cache_key = f"filter_vals_{selected_table}_{filter_column}"
             if filter_cache_key not in st.session_state:
                 try:
@@ -464,7 +483,6 @@ with st.container():
 
             distinct_filter_values = st.session_state.get(filter_cache_key, [])
 
-            # 3️⃣ Filter Value Selection
             with col_step3:
                 if distinct_filter_values:
                     chosen_report = st.selectbox(
@@ -475,7 +493,6 @@ with st.container():
                     chosen_report = None
                     st.warning(f"No values found in `{filter_column}`.")
 
-            # Query all other columns automatically for the selected report
             if chosen_report:
                 try:
                     conn = get_databricks_connection()
@@ -580,7 +597,7 @@ with st.container():
             st.warning("⚠️ Only the first 5 uploaded master files will be processed.")
             master_files = master_files[:5]
 
-# --- 3. Column Matching & Review ---
+# --- 3. Column Matching & Review (Green/Red Visual Styler) ---
 if excel_file is not None and db_columns_input:
     targets = build_targets(db_columns_input)
     available_db_columns = [t["db_column"] for t in targets]
@@ -657,6 +674,44 @@ if excel_file is not None and db_columns_input:
         st.markdown(f'<div class="metric-card"><div class="metric-label">Unmapped</div><div class="metric-num" style="color:#dc2626;">{unmatched_count}</div></div>', unsafe_allow_html=True)
     with m4:
         st.markdown(f'<div class="metric-card"><div class="metric-label">Coverage</div><div class="metric-num" style="color:#2563eb;">{match_rate}%</div></div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
+
+    # --- Green / Red Visual Status Display ---
+    with st.expander("🎨 Visual Status Breakdown (Green = Mapped, Red = Unmapped)", expanded=True):
+        mapped_pills = [
+            f"<span class='pill-mapped'>✓ {r['excel_column']} ➔ {r['db_column']}</span>"
+            for r in reconciled_results if r["db_column"]
+        ]
+        unmapped_pills = [
+            f"<span class='pill-unmapped'>✗ {r['excel_column']}</span>"
+            for r in reconciled_results if not r["db_column"]
+        ]
+
+        c_v1, c_v2 = st.columns(2)
+        with c_v1:
+            st.markdown(f"**🟢 Mapped Columns ({len(mapped_pills)}):**")
+            if mapped_pills:
+                st.markdown(" ".join(mapped_pills), unsafe_allow_html=True)
+            else:
+                st.caption("None mapped yet.")
+
+        with c_v2:
+            st.markdown(f"**🔴 Unmapped Columns ({len(unmapped_pills)}):**")
+            if unmapped_pills:
+                st.markdown(" ".join(unmapped_pills), unsafe_allow_html=True)
+            else:
+                st.caption("All columns mapped!")
+
+        # Formatted visual table with color coding
+        def style_mapping_row(row):
+            is_mapped = row["Target DB Column"] != "-- NOT MATCHED --"
+            bg = "background-color: #dcfce7; color: #14532d; font-weight: 500;" if is_mapped else "background-color: #ffe4e6; color: #7f1d1d; font-weight: 500;"
+            return [bg] * len(row)
+
+        styled_review = edited_table.style.apply(style_mapping_row, axis=1)
+        st.markdown("<div style='margin-top: 0.8rem;'></div>", unsafe_allow_html=True)
+        st.dataframe(styled_review, use_container_width=True, hide_index=True)
 
     duplicates = [col for col, count in Counter(assigned_targets).items() if count > 1]
     has_collision = len(duplicates) > 0
