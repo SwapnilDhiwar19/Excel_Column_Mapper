@@ -1,1 +1,23 @@
 
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Streamlit secrets and settings
+.streamlit/secrets.toml
+
+# Operating system artifacts
+.DS_Store
+Thumbs.db
+
+# Excel/CSV inputs & downloads
+*.xlsx
+*.xls
+*.csv
