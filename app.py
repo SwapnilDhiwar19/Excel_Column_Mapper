@@ -211,7 +211,6 @@ def load_uploaded_df(file) -> pd.DataFrame:
 # ============================================================================
 
 def get_databricks_connection():
-    """Reads credentials directly from st.secrets['databricks']."""
     if not HAS_DATABRICKS_DRIVER:
         st.error("Missing dependency: Run `pip install databricks-sql-connector` in your environment.")
         st.stop()
@@ -247,7 +246,6 @@ def get_databricks_connection():
 
 
 def format_table_identifier(tbl: str) -> str:
-    """Safely quotes 3-part or 2-part Databricks table identifiers using secrets defaults."""
     sec = st.secrets.get("databricks", {})
     cat = sec.get("catalog", "workspace").strip()
     sch = sec.get("schema", "excel_column_mapping_utility").strip()
@@ -354,6 +352,18 @@ st.markdown("""
             background-color: #ffe4e6;
             color: #b91c1c;
             border: 1px solid #fecdd3;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-family: monospace;
+            margin: 3px;
+            font-weight: 600;
+        }
+        .pill-master {
+            display: inline-block;
+            background-color: #e0f2fe;
+            color: #0369a1;
+            border: 1px solid #bae6fd;
             padding: 4px 10px;
             border-radius: 6px;
             font-size: 0.85rem;
@@ -703,7 +713,6 @@ if excel_file is not None and db_columns_input:
             else:
                 st.caption("All columns mapped!")
 
-        # Formatted visual table with color coding
         def style_mapping_row(row):
             is_mapped = row["Target DB Column"] != "-- NOT MATCHED --"
             bg = "background-color: #dcfce7; color: #14532d; font-weight: 500;" if is_mapped else "background-color: #ffe4e6; color: #7f1d1d; font-weight: 500;"
@@ -790,19 +799,70 @@ if excel_file is not None and db_columns_input:
     else:
         st.info("💡 Upload one or more master files in **Step 2B** to enrich your data.")
 
-    # --- 5. Export ---
+    # --- 5. Export with Color-Coded Column Selector & Preview ---
     st.markdown("<div style='margin-top: 2rem;'></div>", unsafe_allow_html=True)
     st.markdown('<div class="step-header">🚀 5. Preview & Export</div>', unsafe_allow_html=True)
 
     all_exportable_cols = list(joined_df.columns)
+    
+    # Helper sets to distinguish column provenance
+    mapped_target_names = {r["db_column"] for r in reconciled_results if r["db_column"]}
+    working_df_cols = set(working_df.columns)
+
+    def get_column_type(col_name: str) -> str:
+        if col_name in mapped_target_names:
+            return "mapped"
+        elif col_name not in working_df_cols:
+            return "master"
+        else:
+            return "unmapped"
+
+    def format_col_option(col_name: str) -> str:
+        ctype = get_column_type(col_name)
+        if ctype == "mapped":
+            return f"🟢 {col_name} (Mapped)"
+        elif ctype == "master":
+            return f"🔵 {col_name} (Master Data)"
+        else:
+            return f"🔴 {col_name} (Unmapped Source)"
+
     with st.expander("👁️ Data Preview & Column Selection", expanded=True):
         selected_cols = st.multiselect(
             "Included Columns in Output:",
             options=all_exportable_cols,
             default=all_exportable_cols,
+            format_func=format_col_option,
+            help="🟢 Green: Standardized DB column | 🔴 Red: Unmapped original column | 🔵 Blue: Master lookup column"
         )
+
+        # Render dynamic colored badges reflecting current multiselect choices
         if selected_cols:
-            st.dataframe(joined_df[selected_cols].head(10), use_container_width=True)
+            selected_badges = []
+            for col in selected_cols:
+                ctype = get_column_type(col)
+                if ctype == "mapped":
+                    selected_badges.append(f"<span class='pill-mapped'>✓ {col}</span>")
+                elif ctype == "master":
+                    selected_badges.append(f"<span class='pill-master'>+ {col}</span>")
+                else:
+                    selected_badges.append(f"<span class='pill-unmapped'>! {col}</span>")
+            
+            st.markdown(" ".join(selected_badges), unsafe_allow_html=True)
+            st.write("")
+
+            # Color-styled DataFrame preview (mapped columns green, unmapped red, master blue)
+            def style_preview_column(s):
+                ctype = get_column_type(s.name)
+                if ctype == "mapped":
+                    color = "background-color: #f0fdf4; color: #166534;"
+                elif ctype == "master":
+                    color = "background-color: #f0f9ff; color: #075985;"
+                else:
+                    color = "background-color: #fef2f2; color: #991b1b;"
+                return [color] * len(s)
+
+            styled_preview_df = joined_df[selected_cols].head(10).style.apply(style_preview_column, axis=0)
+            st.dataframe(styled_preview_df, use_container_width=True)
         else:
             st.warning("Select at least one column to export.")
 
