@@ -376,7 +376,7 @@ st.markdown("""
 
 st.markdown("""
     <div class="hero-container">
-        <div class="hero-title">⚡ AutoSchema Mapper (Databricks)</div>
+        <div class="hero-title">⚡ AutoSchema Mapper</div>
         <p class="hero-desc">Directly connected to Databricks Lakehouse. Select your metadata table, pick your report filter, and map spreadsheet headers with up to 5 master joins.</p>
     </div>
 """, unsafe_allow_html=True)
